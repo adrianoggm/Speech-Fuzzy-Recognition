@@ -16,20 +16,35 @@ q_mem = ctrl.Antecedent(np.arange(0, 1.01, 0.01), 'q_mem')
 # Variable difusa (salida)
 emocion = ctrl.Consequent(np.arange(0, 11, 1), 'emocion')
 
-# Definición de funciones de membresía
-pitch['bajo'] = fuzz.trimf(pitch.universe, [0, 0, 150])
-pitch['alto'] = fuzz.trimf(pitch.universe, [150, 500, 500])
+###############################################################################
+# A) Ajuste de funciones de membresía con TRES etiquetas para pitch y energy
+###############################################################################
+# -- pitch: [0..500] => bajo, medio, alto
+#    (ajusta los puntos si observas que tu pitch real ronda 150~160)
+pitch['bajo']  = fuzz.trimf(pitch.universe,  [0,   0,   140])
+pitch['medio'] = fuzz.trimf(pitch.universe,  [130, 150, 170])
+pitch['alto']  = fuzz.trimf(pitch.universe,  [160, 500, 500])
 
-energy['baja'] = fuzz.trimf(energy.universe, [0, 0, 5])
-energy['alta'] = fuzz.trimf(energy.universe, [5, 10, 10])
+# -- energy: [0..10] => baja, media, alta
+#    (ajusta según tu energy real ~0.4..0.8)
+energy['baja']  = fuzz.trimf(energy.universe, [0,   0,   0.3])
+energy['media'] = fuzz.trimf(energy.universe, [0.2, 0.6, 1.0])
+energy['alta']  = fuzz.trimf(energy.universe, [0.8, 10, 10])
 
-q_mem['LOW']  = fuzz.trimf(q_mem.universe, [0, 0, 0.5])
-q_mem['HIGH'] = fuzz.trimf(q_mem.universe, [0.5, 1, 1])
+# -- q_mem:  [0..1] => LOW, HIGH (sin cambios)
+q_mem['LOW']  = fuzz.trimf(q_mem.universe, [0,   0,   0.5])
+q_mem['HIGH'] = fuzz.trimf(q_mem.universe, [0.5, 1,   1])
 
-emocion['triste']  = fuzz.trimf(emocion.universe, [0, 0, 5])
-emocion['animada'] = fuzz.trimf(emocion.universe, [5, 10, 10])
+# Emoción: [0..10] => triste, animada
+emocion['triste']  = fuzz.trimf(emocion.universe, [0,   0,   5])
+emocion['animada'] = fuzz.trimf(emocion.universe, [5,  10,  10])
 
-# Reglas difusas
+###############################################################################
+# B) Definición de Reglas Ajustadas
+###############################################################################
+# - Se añaden reglas extra para "pitch medio + energy media => triste" 
+#   y se comenta la regla por defecto para no forzar "animada".
+
 rule_emo1 = ctrl.Rule(
     pitch['bajo'] & energy['baja'] & q_mem['LOW'], 
     emocion['triste']
@@ -38,18 +53,46 @@ rule_emo2 = ctrl.Rule(
     pitch['alto'] & energy['alta'] & q_mem['HIGH'], 
     emocion['animada']
 )
+
+# Ejemplo: Si pitch=medio, energy=media => triste (independientemente de q_mem)
 rule_emo3 = ctrl.Rule(
-    pitch['alto'] & q_mem['LOW'], 
+    pitch['medio'] & energy['media'],
     emocion['triste']
 )
-rule_emo_def = ctrl.Rule(
-    ~(pitch['bajo'] | pitch['alto']) |
-    ~(energy['baja'] | energy['alta']) |
-    ~(q_mem['LOW'] | q_mem['HIGH']),
-    emocion['animada']
+
+# (Opcional) Si quieres casos “medio, media, q_mem=HIGH => animada”
+# Descomenta si deseas que a veces sea animada:
+#rule_emo4 = ctrl.Rule(
+#    pitch['medio'] & energy['media'] & q_mem['HIGH'],
+#    emocion['animada']
+#)
+
+# Ejemplo: pitch alto + energy baja => triste, si q_mem=LOW
+rule_emo5 = ctrl.Rule(
+    pitch['alto'] & energy['baja'] & q_mem['LOW'],
+    emocion['triste']
 )
 
-emo_ctrl = ctrl.ControlSystem([rule_emo1, rule_emo2, rule_emo3, rule_emo_def])
+# Comenta / elimina la regla por defecto para ver si ahora se clasifica 'triste' 
+# en casos ambiguos:
+# rule_emo_def = ctrl.Rule(
+#    ~(pitch['bajo'] | pitch['medio'] | pitch['alto']) |
+#    ~(energy['baja'] | energy['media'] | energy['alta']) |
+#    ~(q_mem['LOW'] | q_mem['HIGH']),
+#    emocion['animada']
+# )
+
+# Si deseas mantener la regla por defecto pero como 'triste', podrías hacer:
+# rule_emo_def = ctrl.Rule(..., emocion['triste'])
+
+emo_ctrl = ctrl.ControlSystem([
+    rule_emo1,
+    rule_emo2,
+    rule_emo3,
+    # rule_emo4,  # descomenta si deseas
+    rule_emo5,
+    # rule_emo_def
+])
 emo_simulation = ctrl.ControlSystemSimulation(emo_ctrl)
 
 def classify_emotion(pitch_val, energy_val, q_val):
@@ -65,9 +108,8 @@ def classify_emotion(pitch_val, energy_val, q_val):
     return emo_simulation.output['emocion']
 
 ###############################################################################
-# 2. OPCIONAL: DEFINICIÓN BÁSICA DEL FLIP-FLOP DIFUSO (SR) PARA LA 'MEMORIA'
+# 2. FLIP-FLOP DIFUSO (SR) PARA 'MEMORIA' (sin cambios)
 ###############################################################################
-
 Q_old = ctrl.Antecedent(np.arange(0, 1.01, 0.01), 'Q_old')
 S = ctrl.Antecedent(np.arange(0, 1.01, 0.01), 'S')
 R = ctrl.Antecedent(np.arange(0, 1.01, 0.01), 'R')
@@ -106,19 +148,18 @@ def extraer_caracteristicas(audio_path):
     """
     Carga un audio y retorna pitch medio y energy media (ambas escaladas).
     - Pitch estimado con librosa.pyin (requiere librosa >= 0.8).
-    - Energy calculada como RMS normalizado (0..10 aproximado).
+    - Energy calculada como RMS normalizado (0..10 aprox).
     """
     y, sr = librosa.load(audio_path)
     
     # 3.1 Cálculo de energy (RMS)
-    rms = librosa.feature.rms(y=y)[0]  # array con rms en cada frame
-    energy_val = np.mean(rms) * 10     # simple escalado [0..10 aprox]
+    rms = librosa.feature.rms(y=y)[0]
+    energy_val = np.mean(rms) * 10
     
     # 3.2 Cálculo de pitch (pyin)
-    # Para evitar warnings, capta silencios y asigna NaN => promediamos ignorando NaN
     f0, voiced_flag, voiced_prob = librosa.pyin(y, fmin=50, fmax=400, sr=sr)
     if f0 is not None:
-        pitch_val = np.nanmean(f0)  # media ignorando nan
+        pitch_val = np.nanmean(f0)
         if np.isnan(pitch_val):
             pitch_val = 0.0
     else:
@@ -138,14 +179,13 @@ def clasificar_audios(dir_audios):
     Recorre cada .wav en dir_audios, extrae (pitch, energy),
     usa q_mem=0.0 (por ejemplo) y clasifica con la red difusa.
     """
-    q_mem_anterior = 0.0  # si quisieras actualizar un flip-flop, podrías usarlo
+    q_mem_anterior = 0.0  # si deseas usar un flip-flop real, actualiza en cada bucle
     for fname in os.listdir(dir_audios):
         if fname.endswith(".wav"):
             path = os.path.join(dir_audios, fname)
             pitch_val, energy_val = extraer_caracteristicas(path)
             
-            # (Opcional) Actualizar q_mem con flip-flop (aquí lo dejamos simple)
-            # Ejemplo: S=1.0 si energy_val>5, R=1.0 si energy_val<2 (heurística).
+            # (Ejemplo) Decidir S, R para flip-flop con heurística
             S_val = 1.0 if energy_val > 5 else 0.0
             R_val = 1.0 if energy_val < 2 else 0.0
             q_new_val = update_flip_flop(q_mem_anterior, S_val, R_val)
@@ -153,7 +193,7 @@ def clasificar_audios(dir_audios):
             # Clasificar emoción
             resultado = classify_emotion(pitch_val, energy_val, q_new_val)
             
-            # Interpretación <5 => 'triste', >=5 => 'animada'
+            # Interpretación: <5 => 'triste', >=5 => 'animada'
             if resultado < 5:
                 etiqueta = "TRISTE"
             else:
@@ -164,7 +204,6 @@ def clasificar_audios(dir_audios):
             print(f"  q_mem anter.: {q_mem_anterior:.2f} => new val: {q_new_val:.2f}")
             print(f"  => Emoción difusa: {resultado:.2f} => {etiqueta}")
             
-            # Actualizar q_mem_anterior
             q_mem_anterior = q_new_val
 
 ###############################################################################
